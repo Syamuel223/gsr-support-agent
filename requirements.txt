@@ -2,13 +2,15 @@
 pandas>=2.0
 duckdb>=1.0
 
+# --- Phase 2: RAG + MCP server ---
+chromadb>=0.5
+mcp>=1.0
+
 # --- Later phases (uncomment as we build them) ---
 # langgraph>=0.2
 # langchain>=0.3
 # langchain-anthropic
 # langchain-openai
-# mcp
-# chromadb
 # fastapi
 # uvicorn[standard]
 # redis
