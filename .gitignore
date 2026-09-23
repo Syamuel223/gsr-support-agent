@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Env / secrets
+.env
+*.env.local
+
+# Data (large/raw/generated files -- regenerate via script instead)
+data/raw/*.csv
+*.db
+*.duckdb
+
+# Vector store persisted data
+rag/chroma_db/
+*.sqlite3
+
+# Voice audio scratch files
+voice/tmp/
+*.wav
+*.mp3
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+# Eval outputs (generated, not source)
+eval/results/*.json
+!eval/results/.gitkeep
+
+# Node (if used later for frontend)
+node_modules/
+.next/

@@ -1,0 +1,20 @@
+# --- Phase 1: data layer ---
+pandas>=2.0
+duckdb>=1.0
+
+# --- Later phases (uncomment as we build them) ---
+# langgraph>=0.2
+# langchain>=0.3
+# langchain-anthropic
+# langchain-openai
+# mcp
+# chromadb
+# fastapi
+# uvicorn[standard]
+# redis
+# streamlit
+# openai-whisper     # STT
+# TTS                # or another text-to-speech library
+# python-dotenv
+# langsmith
+# locust
