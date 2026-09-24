@@ -98,6 +98,23 @@ def list_customer_orders(customer_id: str, limit: int = 10) -> dict:
     return {"customer_id": customer_id, "order_count": len(orders), "orders": orders}
 
 
+def get_payment_details(order_id: str) -> dict:
+    """Get payment method, amount, and status for a specific order."""
+    con = _connect()
+    row = con.execute(
+        """
+        SELECT payment_id, order_id, payment_method, amount, status
+        FROM payments WHERE order_id = ?
+        """,
+        [order_id],
+    ).fetchone()
+    con.close()
+    if not row:
+        return {"found": False, "error": f"No payment record found for order {order_id}"}
+    cols = ["payment_id", "order_id", "payment_method", "amount", "status"]
+    return {"found": True, **dict(zip(cols, row))}
+
+
 def check_return_eligibility(order_id: str, order_item_id: str = None) -> dict:
     """
     Check whether an order (or a specific item in it) is still eligible

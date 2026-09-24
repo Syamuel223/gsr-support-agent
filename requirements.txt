@@ -6,17 +6,23 @@ duckdb>=1.0
 chromadb>=0.5
 mcp>=1.0
 
+# --- Phase 3: LangGraph multi-agent pipeline ---
+langgraph>=0.2
+langchain>=0.3
+langchain-core>=0.3
+langchain-google-genai>=2.0
+pydantic>=2.0
+python-dotenv>=1.0
+
+# Optional: only needed if you set GSR_LLM_PROVIDER=anthropic in .env
+# langchain-anthropic>=0.3
+
 # --- Later phases (uncomment as we build them) ---
-# langgraph>=0.2
-# langchain>=0.3
-# langchain-anthropic
-# langchain-openai
 # fastapi
 # uvicorn[standard]
 # redis
 # streamlit
 # openai-whisper     # STT
 # TTS                # or another text-to-speech library
-# python-dotenv
 # langsmith
 # locust

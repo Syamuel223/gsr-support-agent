@@ -8,7 +8,8 @@ which answers using RAG (for policy questions) or real tool calls via a
 custom MCP server (for account-specific data like order status).
 
 ## Status
-🚧 Phase 1 in progress: synthetic operational data + RAG knowledge base.
+🚧 Phase 3 in progress: LangGraph multi-agent pipeline (text-only, voice added
+in a later phase).
 
 ## Why this exists
 Support teams answer the same handful of question types constantly (where's
@@ -61,7 +62,18 @@ Docker
 pip install -r requirements.txt
 python data/generate_synthetic_data.py
 python data/load_data.py
+python rag/embed_and_index.py
+cp .env.example .env   # then add your real ANTHROPIC_API_KEY
 ```
+
+## Running the agent (text, CLI)
+```bash
+python -m agent.graph "Where is my order ord_000519?" cust_000000
+python -m agent.graph "What's your return policy for electronics?"
+python -m agent.graph "I think someone accessed my account without permission"
+```
+The third example should escalate immediately (security-sensitive), per
+the rule in knowledge_base/faqs/account_security_faq.md.
 
 ## Repo layout
 ```

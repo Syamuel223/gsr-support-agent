@@ -44,6 +44,12 @@ def list_customer_orders(customer_id: str, limit: int = 10) -> dict:
 
 
 @mcp.tool()
+def get_payment_details(order_id: str) -> dict:
+    """Get the payment method, amount, and status for a specific order's payment."""
+    return tools.get_payment_details(order_id)
+
+
+@mcp.tool()
 def check_return_eligibility(order_id: str, order_item_id: str = None) -> dict:
     """
     Check whether an order (or a specific item within it) is still
