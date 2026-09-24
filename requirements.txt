@@ -21,11 +21,14 @@ python-dotenv>=1.0
 fastapi>=0.115
 uvicorn[standard]>=0.30
 requests>=2.31   # used by scripts/demo_realtime_signup.py
+python-multipart>=0.0.9   # required by FastAPI for file uploads (voice endpoint)
+
+# --- Phase 5: Voice (local, offline -- no API costs) ---
+openai-whisper>=20231117   # STT; also requires ffmpeg installed on your system
+pyttsx3>=2.90               # TTS; uses Windows SAPI5 / macOS NSSpeechSynthesizer / espeak on Linux
 
 # --- Later phases (uncomment as we build them) ---
 # redis
 # streamlit
-# openai-whisper     # STT
-# TTS                # or another text-to-speech library
 # langsmith
 # locust

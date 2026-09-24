@@ -8,8 +8,7 @@ which answers using RAG (for policy questions) or real tool calls via a
 custom MCP server (for account-specific data like order status).
 
 ## Status
-🚧 Phase 4 in progress: FastAPI layer + real-time signup webhook (voice
-added in a later phase).
+🚧 Phase 5 in progress: local voice (Whisper STT + pyttsx3 TTS).
 
 ## Why this exists
 Support teams answer the same handful of question types constantly (where's
@@ -74,6 +73,40 @@ python -m agent.graph "I think someone accessed my account without permission"
 ```
 The third example should escalate immediately (security-sensitive), per
 the rule in knowledge_base/faqs/account_security_faq.md.
+
+## Voice setup (Phase 5)
+Whisper (STT) needs the `ffmpeg` binary on your system PATH -- this is
+separate from the Python package. On Windows:
+```powershell
+winget install ffmpeg
+```
+(Or download from https://ffmpeg.org/download.html and add it to PATH
+manually.) Restart your terminal after installing so PATH updates take
+effect. Verify with:
+```powershell
+ffmpeg -version
+```
+
+pyttsx3 (TTS) uses Windows' built-in SAPI5 voices -- no extra install
+needed on Windows.
+
+Test the full voice pipeline locally (no server needed):
+```bash
+python -m voice.test_voice_pipeline "Where is my order ord_000519?" cust_000000
+```
+This synthesizes a sample question to audio, transcribes it back with
+Whisper, runs it through the real agent, and speaks the response aloud.
+The first run downloads the Whisper model (~150 MB for the default
+"base" size) -- expect a pause.
+
+Once the API is running (see below), test voice over HTTP:
+```bash
+curl -X POST "http://127.0.0.1:8000/chat/voice?session_id=s1&customer_id=cust_000000" \
+  -F "audio=@question.wav" \
+  --output response.wav
+```
+The transcript and response text come back as response headers
+(`X-Transcript`, `X-Response-Text`), and `response.wav` is the spoken reply.
 
 ## Running the API + real-time signup demo
 ```bash

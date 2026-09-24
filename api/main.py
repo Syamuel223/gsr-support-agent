@@ -2,7 +2,9 @@
 FastAPI layer over the LangGraph agent.
 
 Endpoints:
-    POST /chat               -- send a message, get the agent's response
+    POST /chat               -- send a text message, get the agent's response
+    POST /chat/voice          -- send an audio file, get transcript + text
+                                 response + a spoken-audio response back
     POST /webhook/new-signup -- register a new customer (real-time, no
                                  batch delay -- immediately queryable by /chat)
     GET  /health              -- basic liveness check
@@ -17,13 +19,16 @@ Run:
     uvicorn api.main:app --reload --port 8000
 """
 
+import os
+import tempfile
 from datetime import datetime
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from agent.graph import app as agent_app
@@ -43,6 +48,49 @@ def _get_session(session_id: str) -> dict:
     if session_id not in _sessions:
         _sessions[session_id] = {"customer_id": None, "history": []}
     return _sessions[session_id]
+
+
+def _run_chat_turn(session_id: str, message: str, customer_id: str | None) -> dict:
+    """
+    Core chat logic shared by both /chat (text) and /chat/voice. Keeping
+    this in one place means the voice path can never drift from the text
+    path's behavior -- both go through the exact same agent invocation
+    and session handling.
+    """
+    session = _get_session(session_id)
+
+    if customer_id and not session["customer_id"]:
+        session["customer_id"] = customer_id
+
+    initial_state = {
+        "session_id": session_id,
+        "customer_id": session["customer_id"],
+        "user_message": message,
+        "conversation_history": session["history"],
+        "retrieved_chunks": [],
+        "tool_results": {},
+        "resolved": False,
+        "needs_escalation": False,
+        "retry_count": 0,
+    }
+
+    try:
+        result = agent_app.invoke(initial_state)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent pipeline error: {e}")
+
+    session["history"].append({"role": "user", "content": message})
+    session["history"].append({"role": "assistant", "content": result.get("response", "")})
+    session["history"] = session["history"][-MAX_HISTORY_STORED:]
+
+    return {
+        "response": result.get("response", ""),
+        "intent": result.get("intent"),
+        "resolved": result.get("resolved", False),
+        "escalated": result.get("needs_escalation", False),
+        "ticket_id": result.get("ticket_id"),
+        "customer_id": session["customer_id"],
+    }
 
 
 class ChatRequest(BaseModel):
@@ -76,43 +124,55 @@ class SignupResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    session = _get_session(req.session_id)
+    result = _run_chat_turn(req.session_id, req.message, req.customer_id)
+    return ChatResponse(**result)
 
-    # customer_id can be set on first message and is then sticky for the session
-    if req.customer_id and not session["customer_id"]:
-        session["customer_id"] = req.customer_id
 
-    initial_state = {
-        "session_id": req.session_id,
-        "customer_id": session["customer_id"],
-        "user_message": req.message,
-        "conversation_history": session["history"],
-        "retrieved_chunks": [],
-        "tool_results": {},
-        "resolved": False,
-        "needs_escalation": False,
-        "retry_count": 0,
-    }
+@app.post("/chat/voice")
+async def chat_voice(
+    session_id: str,
+    audio: UploadFile = File(...),
+    customer_id: str | None = None,
+):
+    """
+    Voice-in, voice-out: accepts an audio file, transcribes it locally
+    (Whisper), runs the exact same agent pipeline as /chat, synthesizes
+    the response to speech locally (pyttsx3), and returns a .wav file.
+    The transcript and response text are included as response headers
+    (X-Transcript, X-Response-Text, X-Intent) since the body is audio.
+    """
+    from voice.stt import transcribe_audio
+    from voice.tts import synthesize_speech
+
+    # save the uploaded audio to a temp file for whisper to read
+    suffix = os.path.splitext(audio.filename or "audio.wav")[1] or ".wav"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_in:
+        tmp_in.write(await audio.read())
+        input_path = tmp_in.name
 
     try:
-        result = agent_app.invoke(initial_state)
-    except Exception as e:
-        # Don't leak internal stack traces to the client; still return a
-        # usable, honest response rather than a raw 500 with no context.
-        raise HTTPException(status_code=502, detail=f"Agent pipeline error: {e}")
+        transcription = transcribe_audio(input_path)
+    finally:
+        os.unlink(input_path)
 
-    # persist the turn
-    session["history"].append({"role": "user", "content": req.message})
-    session["history"].append({"role": "assistant", "content": result.get("response", "")})
-    session["history"] = session["history"][-MAX_HISTORY_STORED:]
+    transcript = transcription["text"]
+    if not transcript:
+        raise HTTPException(status_code=400, detail="Could not transcribe any speech from the audio")
 
-    return ChatResponse(
-        response=result.get("response", ""),
-        intent=result.get("intent"),
-        resolved=result.get("resolved", False),
-        escalated=result.get("needs_escalation", False),
-        ticket_id=result.get("ticket_id"),
-        customer_id=session["customer_id"],
+    result = _run_chat_turn(session_id, transcript, customer_id)
+
+    output_path = synthesize_speech(result["response"])
+
+    return FileResponse(
+        output_path,
+        media_type="audio/wav",
+        filename="response.wav",
+        headers={
+            "X-Transcript": transcript,
+            "X-Response-Text": result["response"],
+            "X-Intent": result.get("intent") or "",
+            "X-Escalated": str(result.get("escalated", False)),
+        },
     )
 
 
