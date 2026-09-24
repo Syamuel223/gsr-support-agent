@@ -29,6 +29,7 @@ Rules:
 
 
 def order_status_agent(state: AgentState) -> dict:
+    from agent.history import format_history
     from agent.llm import extract_text, get_agent_llm
 
     llm = get_agent_llm()
@@ -38,9 +39,12 @@ def order_status_agent(state: AgentState) -> dict:
     if state.get("customer_profile"):
         customer_context = f"\n\n[Identified customer: {state['customer_profile']['customer_id']}]"
 
+    history_text = format_history(state.get("conversation_history", []))
+    history_context = f"\n\n[Previous conversation:\n{history_text}]" if history_text else ""
+
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=state["user_message"] + customer_context),
+        HumanMessage(content=state["user_message"] + customer_context + history_context),
     ]
 
     tool_results = {}

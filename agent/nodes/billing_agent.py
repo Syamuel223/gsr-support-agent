@@ -31,6 +31,7 @@ Relevant billing FAQ excerpts:
 
 
 def billing_agent(state: AgentState) -> dict:
+    from agent.history import format_history
     from agent.llm import extract_text, get_agent_llm
 
     policy_chunks = retrieve(state["user_message"], n_results=2, category="policies")
@@ -39,9 +40,12 @@ def billing_agent(state: AgentState) -> dict:
     llm = get_agent_llm()
     llm_with_tools = llm.bind_tools(BILLING_TOOLS)
 
+    history_text = format_history(state.get("conversation_history", []))
+    history_context = f"\n\n[Previous conversation:\n{history_text}]" if history_text else ""
+
     messages = [
         SystemMessage(content=SYSTEM_PROMPT.format(policy_context=policy_context)),
-        HumanMessage(content=state["user_message"]),
+        HumanMessage(content=state["user_message"] + history_context),
     ]
 
     tool_results = {}

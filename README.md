@@ -8,8 +8,8 @@ which answers using RAG (for policy questions) or real tool calls via a
 custom MCP server (for account-specific data like order status).
 
 ## Status
-🚧 Phase 3 in progress: LangGraph multi-agent pipeline (text-only, voice added
-in a later phase).
+🚧 Phase 4 in progress: FastAPI layer + real-time signup webhook (voice
+added in a later phase).
 
 ## Why this exists
 Support teams answer the same handful of question types constantly (where's
@@ -74,6 +74,29 @@ python -m agent.graph "I think someone accessed my account without permission"
 ```
 The third example should escalate immediately (security-sensitive), per
 the rule in knowledge_base/faqs/account_security_faq.md.
+
+## Running the API + real-time signup demo
+```bash
+uvicorn api.main:app --reload --port 8000
+```
+In another terminal:
+```bash
+python scripts/demo_realtime_signup.py
+```
+This registers a brand new customer via /webhook/new-signup and
+immediately chats as them via /chat -- proving there's no batch/refresh
+delay between signup and being queryable.
+
+You can also call the endpoints directly:
+```bash
+curl -X POST http://127.0.0.1:8000/webhook/new-signup \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Test User", "email": "test@example.com", "city": "Pune", "state": "MH"}'
+
+curl -X POST http://127.0.0.1:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "s1", "customer_id": "cust_000000", "message": "Where is my order ord_000519?"}'
+```
 
 ## Repo layout
 ```

@@ -73,6 +73,19 @@ def escalate_to_human(ticket_id: str, context_summary: str) -> dict:
     return _tools.escalate_to_human(ticket_id, context_summary)
 
 
+@tool
+def register_new_customer(name: str, email: str, city: str = None, state: str = None) -> dict:
+    """Register a brand new customer. They become immediately queryable via
+    get_customer_profile right after this call -- no batch/refresh delay."""
+    return _tools.register_new_customer(name, email, city, state)
+
+
+@tool
+def send_notification(customer_id: str, channel: str, message: str) -> dict:
+    """Send a notification to a customer via the given channel (e.g. 'email', 'sms')."""
+    return _tools.send_notification(customer_id, channel, message)
+
+
 # Grouped by which specialist agent typically needs them, so each node only
 # binds the tools relevant to its job (smaller tool list = more reliable
 # tool selection by the LLM).
@@ -82,5 +95,6 @@ BILLING_TOOLS = [get_payment_details, get_order_status]
 ALL_TOOLS = [
     get_customer_profile, get_order_status, list_customer_orders,
     check_return_eligibility, initiate_refund, get_payment_details,
-    create_support_ticket, escalate_to_human,
+    create_support_ticket, escalate_to_human, register_new_customer,
+    send_notification,
 ]

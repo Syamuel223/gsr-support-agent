@@ -36,12 +36,15 @@ Relevant FAQ excerpts:
 
 
 def account_issue_agent(state: AgentState) -> dict:
+    from agent.history import format_history
     from agent.llm import extract_text, get_agent_llm
 
     llm = get_agent_llm()
 
     # Security check first, before anything else -- this gate matters more
     # than answering helpfully, per the "escalate immediately" policy rule.
+    # Deliberately checks only the latest message (not history) so an
+    # unrelated earlier topic can't dilute a genuine security signal.
     security_llm = llm.with_structured_output(SecurityCheck)
     check = security_llm.invoke([
         SystemMessage(content=SECURITY_CHECK_PROMPT),
@@ -62,11 +65,14 @@ def account_issue_agent(state: AgentState) -> dict:
         }
 
     # Routine account question -- answer via RAG.
+    history_text = format_history(state.get("conversation_history", []))
+    history_context = f"\n\n[Previous conversation:\n{history_text}]" if history_text else ""
+
     chunks = retrieve(state["user_message"], n_results=2, category="faqs")
     policy_context = format_chunks_for_prompt(chunks)
     response = llm.invoke([
         SystemMessage(content=ANSWER_PROMPT.format(policy_context=policy_context)),
-        HumanMessage(content=state["user_message"]),
+        HumanMessage(content=state["user_message"] + history_context),
     ])
 
     return {

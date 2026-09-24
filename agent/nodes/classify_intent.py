@@ -24,6 +24,10 @@ exactly one of these categories:
 - unclear: message is too vague/ambiguous to classify confidently, or is
   unrelated to customer support entirely
 
+If recent conversation history is provided, use it to interpret follow-up
+messages correctly (e.g. "yes please" after the agent offered to check
+something is NOT unclear -- classify based on what's actually being asked).
+
 Respond with only the category label, nothing else."""
 
 
@@ -35,10 +39,16 @@ class IntentClassification(BaseModel):
 def classify_intent(state: AgentState) -> dict:
     from langchain_core.prompts import ChatPromptTemplate
 
+    from agent.history import format_history
     from agent.llm import get_classify_llm
 
     llm = get_classify_llm()
     structured_llm = llm.with_structured_output(IntentClassification)
+
+    history_text = format_history(state.get("conversation_history", []))
+    message = state["user_message"]
+    if history_text:
+        message = f"Previous conversation:\n{history_text}\n\nLatest message: {message}"
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
@@ -46,7 +56,7 @@ def classify_intent(state: AgentState) -> dict:
     ])
     chain = prompt | structured_llm
 
-    result: IntentClassification = chain.invoke({"message": state["user_message"]})
+    result: IntentClassification = chain.invoke({"message": message})
 
     return {
         "intent": result.intent,

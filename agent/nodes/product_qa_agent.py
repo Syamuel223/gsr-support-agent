@@ -27,15 +27,19 @@ Relevant policy/FAQ excerpts:
 
 
 def product_qa_agent(state: AgentState) -> dict:
+    from agent.history import format_history
     from agent.llm import extract_text, get_agent_llm
 
     chunks = retrieve(state["user_message"], n_results=3)
     policy_context = format_chunks_for_prompt(chunks)
 
+    history_text = format_history(state.get("conversation_history", []))
+    history_context = f"\n\n[Previous conversation:\n{history_text}]" if history_text else ""
+
     llm = get_agent_llm()
     messages = [
         SystemMessage(content=SYSTEM_PROMPT.format(policy_context=policy_context)),
-        HumanMessage(content=state["user_message"]),
+        HumanMessage(content=state["user_message"] + history_context),
     ]
     response = llm.invoke(messages)
 

@@ -17,9 +17,12 @@ python-dotenv>=1.0
 # Optional: only needed if you set GSR_LLM_PROVIDER=anthropic in .env
 # langchain-anthropic>=0.3
 
+# --- Phase 4: FastAPI layer ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+requests>=2.31   # used by scripts/demo_realtime_signup.py
+
 # --- Later phases (uncomment as we build them) ---
-# fastapi
-# uvicorn[standard]
 # redis
 # streamlit
 # openai-whisper     # STT
