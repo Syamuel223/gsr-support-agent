@@ -8,8 +8,7 @@ which answers using RAG (for policy questions) or real tool calls via a
 custom MCP server (for account-specific data like order status).
 
 ## Status
-🚧 Phase 6 in progress: Streamlit frontend (chat + voice, talks to the
-FastAPI backend over HTTP).
+🚧 Phase 7 in progress: caching, async concurrency, load testing.
 
 ## Why this exists
 Support teams answer the same handful of question types constantly (where's
@@ -75,7 +74,80 @@ python -m agent.graph "I think someone accessed my account without permission"
 The third example should escalate immediately (security-sensitive), per
 the rule in knowledge_base/faqs/account_security_faq.md.
 
+## Phase 7: caching, concurrency, load testing
+
+**What's actually cached, and what isn't (on purpose):** RAG retrieval
+(policy/FAQ lookups) is cached in-process (`functools.lru_cache`), since
+many customers ask the same policy questions and the knowledge base only
+changes when you re-run `embed_and_index.py`. Chat *responses* are
+deliberately **not** cached -- they're customer-specific (order status,
+account details), and caching them would either leak one customer's data
+to another or serve stale account info. This mirrors the same principle
+from the AskWarehouse project: cache what's safe and reusable, never
+cache what's personalized.
+
+**Session storage** (`api/session_store.py`) uses Redis if `REDIS_URL` is
+set and reachable, and falls back to in-memory automatically (with a
+clear log message) if not -- so local dev works with zero setup, but the
+code is production-shaped. To actually use Redis locally:
+```bash
+# via Docker, simplest option
+docker run -d -p 6379:6379 redis
+```
+Then add to `.env`:
+```
+REDIS_URL=redis://localhost:6379/0
+```
+
+**Concurrency**: `/chat` and `/webhook/new-signup` are async; the actual
+blocking work (LLM calls, DB queries) runs via `asyncio.to_thread` so one
+slow request doesn't stall the whole server. A semaphore
+(`GSR_MAX_CONCURRENT_AGENT_CALLS`, default 10) caps how many agent
+invocations run *simultaneously* -- extra requests queue rather than get
+rejected, protecting both the LLM provider's rate limit and DuckDB's
+single-writer constraint from a traffic burst.
+
+**A real, stated limitation**: DuckDB is a single-writer embedded
+database. Write operations (refunds, tickets, signups) retry with
+jittered backoff on transient lock conflicts (`mcp_server/tools.py`,
+`_run_write_with_retry`), which handles realistic concurrent load for a
+demo/portfolio deployment -- but it is not a substitute for a real
+multi-writer database under production write volume. The honest answer
+for scaling this further is migrating operational tables to Postgres
+(RAG/analytical data can stay on DuckDB/Chroma).
+
+### Running the load test
+```bash
+pip install -r requirements.txt   # includes locust now
+uvicorn api.main:app --reload --port 8000   # terminal 1
+locust -f load_test/locustfile.py --host http://127.0.0.1:8000   # terminal 2
+```
+Open http://localhost:8089, set **100 users**, spawn rate **10/s**, and
+start the test. Read the real p50/p95/p99 latency and failure rate off
+the Locust dashboard -- these are the numbers to put in your resume/
+README, not estimates. A rising p95 with near-zero failures at high
+concurrency reflects the semaphore queuing requests as designed; actual
+5xx failures are the real signal to investigate.
+
 ## Troubleshooting
+
+**Load test shows "Could not connect to tenant default_tenant" on /chat**
+This was a real thread-safety bug in the RAG retriever's lazy Chroma
+client initialization -- fixed in `agent/rag_retriever.py` via a
+double-checked lock (`_init_lock`). If you still see it, make sure
+you're running the latest version of that file.
+
+**Load test shows 429 RESOURCE_EXHAUSTED under concurrent load, even on
+gemini-3.5-flash-lite**
+This is expected, not a bug: Gemini's free tier has a per-minute rate
+limit separate from the daily quota, and 100 simulated concurrent users
+can exceed it almost immediately since each chat turn makes several LLM
+calls. Mitigations: lower `GSR_MAX_CONCURRENT_AGENT_CALLS` to smooth out
+the request rate, add delay between simulated users in
+`load_test/locustfile.py` (increase `wait_time`), or note in your
+writeup that the LLM provider's free-tier rate limit -- not the
+application -- is the binding constraint at this concurrency level
+(which is itself a legitimate, useful load-test finding).
 
 **"429 RESOURCE_EXHAUSTED" / "exceeded your current quota"**
 Gemini's free tier gives regular Flash models only ~20 requests/day as of

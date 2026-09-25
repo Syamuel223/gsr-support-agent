@@ -11,6 +11,8 @@ than relying on con.sql(..., params=...) which behaves inconsistently
 across DuckDB versions.
 """
 
+import random
+import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -34,6 +36,34 @@ DEFAULT_RETURN_WINDOW_DAYS = 7
 
 def _connect():
     return duckdb.connect(str(DB_PATH), read_only=False)
+
+
+def _run_write_with_retry(fn, max_retries: int = 5):
+    """
+    DuckDB is a single-writer embedded database, and every tool call here
+    opens its own short-lived connection -- fine for reads (which can run
+    concurrently), but under real concurrent load (many users triggering
+    refunds/tickets/signups at once), two write connections can briefly
+    contend for the same file lock. Rather than pretending this can't
+    happen, retry with jittered backoff on lock-related errors, which
+    covers realistic concurrency for a demo/portfolio deployment.
+
+    This is a mitigation, not a fix: DuckDB isn't built for high
+    concurrent write throughput the way Postgres is. The honest
+    production answer is migrating the operational tables to Postgres
+    (the RAG/analytical side can stay on DuckDB/Chroma) once real
+    concurrent write volume is expected -- noted in the README.
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except duckdb.Error as e:
+            last_error = e
+            if "lock" not in str(e).lower():
+                raise  # not a concurrency issue -- don't mask a real bug by retrying it
+            time.sleep(0.05 * (2 ** attempt) + random.uniform(0, 0.05))
+    raise last_error
 
 
 def get_customer_profile(customer_id: str) -> dict:
@@ -189,15 +219,21 @@ def initiate_refund(order_id: str, order_item_id: str, reason: str) -> dict:
         }
 
     return_id = f"ret_{uuid.uuid4().hex[:8]}"
-    con = _connect()
-    con.execute(
-        """
-        INSERT INTO returns (return_id, order_id, order_item_id, reason, status, requested_at)
-        VALUES (?, ?, ?, ?, 'requested', ?)
-        """,
-        [return_id, order_id, order_item_id, reason, datetime.now()],
-    )
-    con.close()
+
+    def _write():
+        con = _connect()
+        try:
+            con.execute(
+                """
+                INSERT INTO returns (return_id, order_id, order_item_id, reason, status, requested_at)
+                VALUES (?, ?, ?, ?, 'requested', ?)
+                """,
+                [return_id, order_id, order_item_id, reason, datetime.now()],
+            )
+        finally:
+            con.close()
+
+    _run_write_with_retry(_write)
     return {"success": True, "return_id": return_id, "status": "requested"}
 
 
@@ -205,33 +241,45 @@ def create_support_ticket(customer_id: str, category: str, priority: str = "medi
                            order_id: str = None) -> dict:
     """Create a new support ticket for a customer."""
     ticket_id = f"tkt_{uuid.uuid4().hex[:8]}"
-    con = _connect()
-    con.execute(
-        """
-        INSERT INTO tickets (ticket_id, customer_id, order_id, category, priority, status, created_at, resolved_at)
-        VALUES (?, ?, ?, ?, ?, 'open', ?, NULL)
-        """,
-        [ticket_id, customer_id, order_id, category, priority, datetime.now()],
-    )
-    con.close()
+
+    def _write():
+        con = _connect()
+        try:
+            con.execute(
+                """
+                INSERT INTO tickets (ticket_id, customer_id, order_id, category, priority, status, created_at, resolved_at)
+                VALUES (?, ?, ?, ?, ?, 'open', ?, NULL)
+                """,
+                [ticket_id, customer_id, order_id, category, priority, datetime.now()],
+            )
+        finally:
+            con.close()
+
+    _run_write_with_retry(_write)
     return {"success": True, "ticket_id": ticket_id, "status": "open"}
 
 
 def update_ticket(ticket_id: str, status: str) -> dict:
     """Update a ticket's status (e.g. to 'resolved' or 'escalated')."""
-    con = _connect()
     resolved_at = datetime.now() if status == "resolved" else None
-    con.execute(
-        """
-        UPDATE tickets SET status = ?, resolved_at = COALESCE(?, resolved_at)
-        WHERE ticket_id = ?
-        """,
-        [status, resolved_at, ticket_id],
-    )
-    row = con.execute(
-        "SELECT ticket_id FROM tickets WHERE ticket_id = ?", [ticket_id]
-    ).fetchone()
-    con.close()
+
+    def _write():
+        con = _connect()
+        try:
+            con.execute(
+                """
+                UPDATE tickets SET status = ?, resolved_at = COALESCE(?, resolved_at)
+                WHERE ticket_id = ?
+                """,
+                [status, resolved_at, ticket_id],
+            )
+            return con.execute(
+                "SELECT ticket_id FROM tickets WHERE ticket_id = ?", [ticket_id]
+            ).fetchone()
+        finally:
+            con.close()
+
+    row = _run_write_with_retry(_write)
     if not row:
         return {"success": False, "error": f"No ticket found with id {ticket_id}"}
     return {"success": True, "ticket_id": ticket_id, "status": status}
@@ -258,15 +306,21 @@ def register_new_customer(name: str, email: str, city: str = None, state: str = 
     with no batch/refresh delay.
     """
     customer_id = f"cust_{uuid.uuid4().hex[:8]}"
-    con = _connect()
-    con.execute(
-        """
-        INSERT INTO customers (customer_id, name, email, city, state, signup_date, tier)
-        VALUES (?, ?, ?, ?, ?, ?, 'regular')
-        """,
-        [customer_id, name, email, city, state, datetime.now()],
-    )
-    con.close()
+
+    def _write():
+        con = _connect()
+        try:
+            con.execute(
+                """
+                INSERT INTO customers (customer_id, name, email, city, state, signup_date, tier)
+                VALUES (?, ?, ?, ?, ?, ?, 'regular')
+                """,
+                [customer_id, name, email, city, state, datetime.now()],
+            )
+        finally:
+            con.close()
+
+    _run_write_with_retry(_write)
     return {"success": True, "customer_id": customer_id}
 
 

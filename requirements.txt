@@ -30,7 +30,9 @@ pyttsx3>=2.90               # TTS; uses Windows SAPI5 / macOS NSSpeechSynthesize
 # --- Phase 6: Frontend ---
 streamlit>=1.38   # >=1.38 required for the built-in st.audio_input mic widget
 
+# --- Phase 7: caching, concurrency, load testing ---
+redis>=5.0   # optional -- session store falls back to in-memory if unreachable
+locust>=2.29
+
 # --- Later phases (uncomment as we build them) ---
-# redis
 # langsmith
-# locust
