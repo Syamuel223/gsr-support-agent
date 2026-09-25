@@ -27,8 +27,10 @@ python-multipart>=0.0.9   # required by FastAPI for file uploads (voice endpoint
 openai-whisper>=20231117   # STT; also requires ffmpeg installed on your system
 pyttsx3>=2.90               # TTS; uses Windows SAPI5 / macOS NSSpeechSynthesizer / espeak on Linux
 
+# --- Phase 6: Frontend ---
+streamlit>=1.38   # >=1.38 required for the built-in st.audio_input mic widget
+
 # --- Later phases (uncomment as we build them) ---
 # redis
-# streamlit
 # langsmith
 # locust

@@ -8,7 +8,8 @@ which answers using RAG (for policy questions) or real tool calls via a
 custom MCP server (for account-specific data like order status).
 
 ## Status
-🚧 Phase 5 in progress: local voice (Whisper STT + pyttsx3 TTS).
+🚧 Phase 6 in progress: Streamlit frontend (chat + voice, talks to the
+FastAPI backend over HTTP).
 
 ## Why this exists
 Support teams answer the same handful of question types constantly (where's
@@ -74,6 +75,24 @@ python -m agent.graph "I think someone accessed my account without permission"
 The third example should escalate immediately (security-sensitive), per
 the rule in knowledge_base/faqs/account_security_faq.md.
 
+## Troubleshooting
+
+**"429 RESOURCE_EXHAUSTED" / "exceeded your current quota"**
+Gemini's free tier gives regular Flash models only ~20 requests/day as of
+late 2026, and a single chat turn makes several LLM calls (intent
+classification + tool-calling rounds), so this exhausts fast during
+testing. The project defaults to `gemini-3.5-flash-lite`, which gets a
+much higher ~500 requests/day free quota for the same $0 cost -- if you
+still hit this, either wait for the daily reset (resets at midnight
+Pacific Time) or switch providers (see `.env.example` for the Anthropic
+option, if you have API credits).
+
+**Frontend shows a generic error with no detail**
+Check the `uvicorn` terminal -- FastAPI logs the full Python traceback
+server-side even when the client only sees a generic error page. The
+frontend's error messages also surface the FastAPI `detail` field
+directly where possible.
+
 ## Voice setup (Phase 5)
 Whisper (STT) needs the `ffmpeg` binary on your system PATH -- this is
 separate from the Python package. On Windows:
@@ -107,6 +126,17 @@ curl -X POST "http://127.0.0.1:8000/chat/voice?session_id=s1&customer_id=cust_00
 ```
 The transcript and response text come back as response headers
 (`X-Transcript`, `X-Response-Text`), and `response.wav` is the spoken reply.
+
+## Running the frontend
+With the API running (see above), in a separate terminal:
+```bash
+streamlit run frontend/app.py
+```
+Opens at http://localhost:8501. Use the sidebar to either sign in as an
+existing customer (e.g. `cust_000000`) or sign up as a brand new one --
+signing up there and then immediately chatting proves the same real-time
+requirement as the CLI demo, but interactively. Type a message or use the
+built-in mic recorder to test voice.
 
 ## Running the API + real-time signup demo
 ```bash

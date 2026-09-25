@@ -18,8 +18,14 @@ PROVIDER = os.environ.get("GSR_LLM_PROVIDER", "google").lower()
 
 DEFAULT_MODELS = {
     "google": {
-        "classify": "gemini-3.6-flash",
-        "agent": "gemini-3.6-flash",
+        # Flash-Lite gets ~500 free requests/day vs. only ~20/day for
+        # regular Flash models as of late 2026 -- this matters a lot here
+        # since a single chat turn makes several LLM calls (classification
+        # + tool-calling rounds), so Flash's 20/day gets exhausted almost
+        # immediately during testing. Flash-Lite trades a little reasoning
+        # quality for a quota that's actually usable for a demo project.
+        "classify": "gemini-3.5-flash-lite",
+        "agent": "gemini-3.5-flash-lite",
     },
     "anthropic": {
         "classify": "claude-haiku-4-5-20251001",
