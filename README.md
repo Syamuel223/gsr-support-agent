@@ -8,7 +8,7 @@ which answers using RAG (for policy questions) or real tool calls via a
 custom MCP server (for account-specific data like order status).
 
 ## Status
-🚧 Phase 7 in progress: caching, async concurrency, load testing.
+🚧 Phase 8 in progress: containerization + deployment documentation.
 
 ## Why this exists
 Support teams answer the same handful of question types constantly (where's
@@ -128,6 +128,69 @@ the Locust dashboard -- these are the numbers to put in your resume/
 README, not estimates. A rising p95 with near-zero failures at high
 concurrency reflects the semaphore queuing requests as designed; actual
 5xx failures are the real signal to investigate.
+
+## Phase 8: Deployment
+
+**What's deployed vs. what stays local -- and why, explicitly.**
+
+| Component | Deployed (Docker) | Local only |
+|---|---|---|
+| FastAPI core (`/chat`, `/webhook/new-signup`, `/health`) | ✅ | |
+| RAG (Chroma) + MCP tools (DuckDB) | ✅ | |
+| Redis session store | ✅ | |
+| Streamlit frontend | | ✅ |
+| Voice (`/chat/voice`, Whisper, pyttsx3) | | ✅ |
+
+Voice is deliberately kept local rather than containerized: Whisper pulls
+in PyTorch (~1-2GB), which doesn't fit a typical free-tier host's memory
+budget, and pyttsx3 depends on OS-level speech engines (SAPI5/espeak)
+that a minimal Linux container doesn't have. This isn't a limitation
+discovered by accident -- it's a scoping decision: the *reasoning and
+tool-use* architecture (the actual hard engineering problem) is what's
+deployed and demoable via a public URL; voice I/O is a local capability
+you can demo live in an interview instead. `requirements-core.txt` and
+`requirements.txt` reflect this split explicitly.
+
+### Running locally with Docker
+```bash
+cp .env.example .env   # fill in GOOGLE_API_KEY
+docker compose up --build
+```
+First run builds the synthetic dataset + RAG index automatically (see
+`entrypoint.sh`) and persists them in named volumes, so subsequent
+`docker compose up` runs skip that step. API available at
+`http://localhost:8000`.
+
+### Deploying to a free-tier host (Render, Railway, Fly.io)
+These all support "deploy from a Dockerfile" directly from your GitHub
+repo:
+1. Push this repo to GitHub (already done).
+2. Create a new Web Service, point it at the repo, and let it detect the
+   `Dockerfile`.
+3. Set the `GOOGLE_API_KEY` environment variable in the host's dashboard
+   (never commit it).
+4. For Redis: most of these hosts offer a managed Redis add-on -- set
+   `REDIS_URL` to its connection string. If you skip this, the app falls
+   back to in-memory sessions automatically (fine for a demo, just won't
+   survive a restart).
+5. The container's port may be assigned dynamically by the host -- check
+   their docs; you may need `--port $PORT` instead of the hardcoded 8000
+   in `entrypoint.sh` depending on the platform.
+
+### Architecture summary (for your resume/README)
+```
+Voice/Text input (Streamlit, local)
+        |
+FastAPI (async, semaphore-gated concurrency) -- deployed
+        |
+LangGraph multi-agent: identify_customer -> classify_intent ->
+  [order_status | returns_refund | product_qa | billing | account_issue]
+  -> resolution_check -> respond | escalate
+        |
+Custom MCP-backed tools (DuckDB) + RAG (Chroma, cached, thread-safe)
+        |
+Redis (sessions) -- deployed alongside the API
+```
 
 ## Troubleshooting
 

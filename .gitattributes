@@ -1,0 +1,5 @@
+# entrypoint.sh runs inside a Linux container via /bin/sh -- if git
+# checks it out with CRLF line endings (the Windows default), the
+# shebang line becomes "#!/bin/sh\r", which fails to execute. Force LF
+# for shell scripts regardless of platform.
+*.sh text eol=lf

@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GSR_LLM_PROVIDER=${GSR_LLM_PROVIDER:-google}
+      - REDIS_URL=redis://redis:6379/0
+      - GSR_MAX_CONCURRENT_AGENT_CALLS=${GSR_MAX_CONCURRENT_AGENT_CALLS:-10}
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      # persists the DuckDB warehouse and Chroma index across container
+      # rebuilds, so entrypoint.sh's "build on first run" logic doesn't
+      # redo work every time you docker compose up
+      - warehouse_data:/app/data
+      - chroma_data:/app/rag/chroma_db
+
+volumes:
+  redis_data:
+  warehouse_data:
+  chroma_data:

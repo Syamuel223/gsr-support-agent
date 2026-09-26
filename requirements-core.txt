@@ -1,0 +1,26 @@
+# Core API requirements -- what actually gets deployed to a cloud host.
+# Excludes openai-whisper/pyttsx3 deliberately: whisper pulls in PyTorch
+# (~1-2GB), which doesn't fit a typical free-tier host's memory budget,
+# and pyttsx3 depends on OS-level speech engines that don't exist in a
+# minimal Linux container anyway. Voice stays a local-development
+# capability -- see README's Deployment section for the reasoning.
+# For local dev with voice, use the full requirements.txt instead.
+
+pandas>=2.0
+duckdb>=1.0
+
+chromadb>=0.5
+mcp>=1.0
+
+langgraph>=0.2
+langchain>=0.3
+langchain-core>=0.3
+langchain-google-genai>=2.0
+pydantic>=2.0
+python-dotenv>=1.0
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+
+redis>=5.0
