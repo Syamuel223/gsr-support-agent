@@ -1,5 +1,9 @@
 # GSR Support Agent — Multi-Agent Customer Support (Voice + Text)
 
+**🔗 Live demo:** https://gsr-support-agent.onrender.com (core text API —
+try `/health`, or POST to `/chat`. First request may take ~30s if the
+free-tier instance has gone to sleep from inactivity.)
+
 A multi-agent customer support system for **GSR (GlobalShop Retail)**, a
 fictional e-commerce company built for this project. Customers chat or
 speak to the agent about orders, returns, billing, and account issues; a
