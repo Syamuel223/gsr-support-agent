@@ -18,4 +18,4 @@ if [ ! -d "rag/chroma_db" ]; then
 fi
 
 echo "Starting API..."
-exec uvicorn api.main:app --host 0.0.0.0 --port 8000
+exec uvicorn api.main:app --host 0.0.0.0 --port "${PORT:-8000}"
