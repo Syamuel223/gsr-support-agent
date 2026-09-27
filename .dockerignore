@@ -9,7 +9,8 @@ __pycache__/
 data/raw/*.csv
 *.duckdb
 rag/chroma_db/
-frontend/
+frontend/node_modules/
+frontend/dist/
 voice/
 load_test/
 scripts/
