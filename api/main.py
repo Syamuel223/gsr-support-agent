@@ -5,8 +5,9 @@ Endpoints:
     POST /chat               -- send a text message, get the agent's response
     POST /chat/voice          -- send an audio file, get transcript + text
                                  response + a spoken-audio response back
-    POST /webhook/new-signup -- register a new customer (real-time, no
-                                 batch delay -- immediately queryable by /chat)
+    POST /auth/signup         -- create an account and sign in
+    POST /auth/login          -- sign in with email and password
+    POST /auth/logout         -- clear the signed-in cookie
     GET  /health              -- basic liveness check, includes concurrency stats
 
 Concurrency design (Phase 7):
@@ -29,6 +30,7 @@ Run:
 """
 
 import asyncio
+import logging
 import os
 import tempfile
 import time
@@ -38,20 +40,36 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from agent.graph import app as agent_app
-from agent.langchain_tools import register_new_customer as register_new_customer_tool
 from api.session_store import get_session, save_turn
 from mcp_server.tools import get_customer_profile
+from api.auth import authenticate, create_account, get_account, initialize_auth_store, issue_token, verify_token
 
 app = FastAPI(title="GSR Support Agent API")
+
+# The React storefront is built into frontend/dist for deployment. During
+# frontend development Vite runs separately and calls this API directly.
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get(
+        "GSR_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(","),
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+    allow_credentials=True,
+)
 
 MAX_CONCURRENT_AGENT_CALLS = int(os.environ.get("GSR_MAX_CONCURRENT_AGENT_CALLS", 10))
 _agent_semaphore = asyncio.Semaphore(MAX_CONCURRENT_AGENT_CALLS)
 _active_agent_calls = 0  # for /health visibility only
+logger = logging.getLogger("gsr.chat")
 
 
 def _invoke_agent_sync(initial_state: dict) -> dict:
@@ -67,9 +85,15 @@ async def _run_chat_turn(session_id: str, message: str, customer_id: str | None)
     and session handling.
     """
     global _active_agent_calls
+    turn_started = time.perf_counter()
 
     session = get_session(session_id)
-    effective_customer_id = session["customer_id"] or customer_id
+    stored_customer_id = session["customer_id"]
+    if stored_customer_id and stored_customer_id != customer_id:
+        raise HTTPException(status_code=403, detail="This conversation belongs to a different signed-in account. Start a new chat.")
+    if stored_customer_id and not customer_id:
+        raise HTTPException(status_code=401, detail="Please sign in again to continue this conversation.")
+    effective_customer_id = customer_id
 
     initial_state = {
         "session_id": session_id,
@@ -83,7 +107,10 @@ async def _run_chat_turn(session_id: str, message: str, customer_id: str | None)
         "retry_count": 0,
     }
 
+    queued_at = time.perf_counter()
     async with _agent_semaphore:
+        queue_ms = round((time.perf_counter() - queued_at) * 1000, 1)
+        agent_started = time.perf_counter()
         _active_agent_calls += 1
         try:
             result = await asyncio.to_thread(_invoke_agent_sync, initial_state)
@@ -91,6 +118,14 @@ async def _run_chat_turn(session_id: str, message: str, customer_id: str | None)
             raise HTTPException(status_code=502, detail=f"Agent pipeline error: {e}")
         finally:
             _active_agent_calls -= 1
+    agent_ms = round((time.perf_counter() - agent_started) * 1000, 1)
+    timings_ms = {
+        **result.get("node_timings_ms", {}),
+        "semaphore_wait": queue_ms,
+        "agent_total": agent_ms,
+        "request_total": round((time.perf_counter() - turn_started) * 1000, 1),
+    }
+    logger.info("chat completed intent=%s source=%s timings_ms=%s", result.get("intent"), result.get("intent_source"), timings_ms)
 
     updated_session = save_turn(
         session_id, customer_id, message, result.get("response", "")
@@ -103,15 +138,15 @@ async def _run_chat_turn(session_id: str, message: str, customer_id: str | None)
         "escalated": result.get("needs_escalation", False),
         "ticket_id": result.get("ticket_id"),
         "customer_id": updated_session["customer_id"],
+        "intent_source": result.get("intent_source"),
+        "timings_ms": timings_ms,
     }
 
 
 class ChatRequest(BaseModel):
     session_id: str = Field(..., description="Stable id for this conversation")
     message: str
-    customer_id: str | None = Field(
-        None, description="Set once (e.g. at login); remembered for the rest of the session"
-    )
+    model_config = {"extra": "forbid"}
 
 
 class ChatResponse(BaseModel):
@@ -121,31 +156,95 @@ class ChatResponse(BaseModel):
     escalated: bool
     ticket_id: str | None
     customer_id: str | None
+    intent_source: str | None
+    timings_ms: dict[str, float]
 
 
-class SignupRequest(BaseModel):
+class AuthSignupRequest(BaseModel):
     name: str
     email: str
-    city: str | None = None
-    state: str | None = None
+    password: str
 
 
-class SignupResponse(BaseModel):
+class AuthLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
     customer_id: str
-    message: str
+    email: str
+    name: str
+
+
+@app.on_event("startup")
+async def startup_auth_store():
+    await asyncio.to_thread(initialize_auth_store)
+
+
+def _authenticated_customer(request: Request) -> str | None:
+    authorization = request.headers.get("authorization", "")
+    token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else request.cookies.get("gsr_access")
+    if not token:
+        return None
+    customer_id = verify_token(token)
+    if not customer_id or not get_account(customer_id):
+        raise HTTPException(status_code=401, detail="Your sign-in has expired. Please sign in again.")
+    return customer_id
+
+
+def _set_auth_cookie(response: Response, customer_id: str, request: Request):
+    response.set_cookie(
+        "gsr_access", issue_token(customer_id), max_age=60 * 60 * 12,
+        httponly=True, secure=request.url.scheme == "https", samesite="lax", path="/",
+    )
+
+
+@app.post("/auth/signup", response_model=AuthResponse, status_code=201)
+async def auth_signup(req: AuthSignupRequest, request: Request, response: Response):
+    try:
+        account = await asyncio.to_thread(create_account, req.name, req.email, req.password)
+    except ValueError as e:
+        raise HTTPException(status_code=409 if "already exists" in str(e) else 400, detail=str(e))
+    _set_auth_cookie(response, account["customer_id"], request)
+    return AuthResponse(**account)
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+async def auth_login(req: AuthLoginRequest, request: Request, response: Response):
+    account = await asyncio.to_thread(authenticate, req.email, req.password)
+    if not account:
+        raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+    _set_auth_cookie(response, account["customer_id"], request)
+    return AuthResponse(**account)
+
+
+@app.get("/auth/me", response_model=AuthResponse)
+async def auth_me(request: Request):
+    customer_id = _authenticated_customer(request)
+    if not customer_id:
+        raise HTTPException(status_code=401, detail="Please sign in to continue.")
+    return AuthResponse(**get_account(customer_id))
+
+
+@app.post("/auth/logout")
+async def auth_logout(response: Response):
+    response.delete_cookie("gsr_access", httponly=True, samesite="lax", path="/")
+    return {"signed_out": True}
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    result = await _run_chat_turn(req.session_id, req.message, req.customer_id)
+async def chat(req: ChatRequest, request: Request):
+    customer_id = _authenticated_customer(request)
+    result = await _run_chat_turn(req.session_id, req.message, customer_id)
     return ChatResponse(**result)
 
 
 @app.post("/chat/voice")
 async def chat_voice(
     session_id: str,
+    request: Request,
     audio: UploadFile = File(...),
-    customer_id: str | None = None,
 ):
     """
     Voice-in, voice-out: accepts an audio file, transcribes it locally
@@ -174,7 +273,7 @@ async def chat_voice(
     if not transcript:
         raise HTTPException(status_code=400, detail="Could not transcribe any speech from the audio")
 
-    result = await _run_chat_turn(session_id, transcript, customer_id)
+    result = await _run_chat_turn(session_id, transcript, _authenticated_customer(request))
 
     output_path = await asyncio.to_thread(synthesize_speech, result["response"])
 
@@ -188,27 +287,6 @@ async def chat_voice(
             "X-Intent": result.get("intent") or "",
             "X-Escalated": str(result.get("escalated", False)),
         },
-    )
-
-
-@app.post("/webhook/new-signup", response_model=SignupResponse)
-async def new_signup(req: SignupRequest):
-    """
-    Registers a new customer immediately in the operational database.
-    The returned customer_id is queryable via /chat (or get_customer_profile
-    directly) right away -- no batch/refresh delay, proving the real-time
-    requirement this project was built around.
-    """
-    result = await asyncio.to_thread(
-        register_new_customer_tool.invoke,
-        {"name": req.name, "email": req.email, "city": req.city, "state": req.state},
-    )
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail="Failed to register customer")
-
-    return SignupResponse(
-        customer_id=result["customer_id"],
-        message=f"Welcome to GSR, {req.name}! Your account is ready.",
     )
 
 
@@ -229,3 +307,17 @@ async def health():
         "max_concurrent_agent_calls": MAX_CONCURRENT_AGENT_CALLS,
     }
     return checks
+
+
+# Mount the compiled storefront after API routes so it cannot shadow them.
+# The catch-all supports client-side React routes as the storefront grows.
+_frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+if os.path.isdir(_frontend_dist):
+    app.mount("/assets", StaticFiles(directory=os.path.join(_frontend_dist, "assets")), name="storefront-assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def storefront(path: str):
+        requested = os.path.join(_frontend_dist, path)
+        if path and os.path.isfile(requested) and os.path.commonpath([_frontend_dist, requested]) == _frontend_dist:
+            return FileResponse(requested)
+        return FileResponse(os.path.join(_frontend_dist, "index.html"))

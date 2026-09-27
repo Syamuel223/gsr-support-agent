@@ -10,6 +10,7 @@ Run a single test message:
 """
 
 import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -33,15 +34,24 @@ from agent.state import AgentState
 def build_graph():
     graph = StateGraph(AgentState)
 
-    graph.add_node("identify_customer", identify_customer)
-    graph.add_node("classify_intent", classify_intent)
-    graph.add_node("order_status_agent", order_status_agent)
-    graph.add_node("returns_refund_agent", returns_refund_agent)
-    graph.add_node("product_qa_agent", product_qa_agent)
-    graph.add_node("billing_agent", billing_agent)
-    graph.add_node("account_issue_agent", account_issue_agent)
-    graph.add_node("resolution_check", resolution_check)
-    graph.add_node("escalate", escalation_agent)
+    def timed(node_name, node_fn):
+        def invoke(state):
+            started = time.perf_counter()
+            updates = node_fn(state)
+            timings = dict(state.get("node_timings_ms", {}))
+            timings[node_name] = round((time.perf_counter() - started) * 1000, 1)
+            return {**updates, "node_timings_ms": timings}
+        return invoke
+
+    graph.add_node("identify_customer", timed("identify_customer", identify_customer))
+    graph.add_node("classify_intent", timed("classify_intent", classify_intent))
+    graph.add_node("order_status_agent", timed("order_status_agent", order_status_agent))
+    graph.add_node("returns_refund_agent", timed("returns_refund_agent", returns_refund_agent))
+    graph.add_node("product_qa_agent", timed("product_qa_agent", product_qa_agent))
+    graph.add_node("billing_agent", timed("billing_agent", billing_agent))
+    graph.add_node("account_issue_agent", timed("account_issue_agent", account_issue_agent))
+    graph.add_node("resolution_check", timed("resolution_check", resolution_check))
+    graph.add_node("escalate", timed("escalate", escalation_agent))
     # terminal "respond" node is a no-op passthrough -- the response is
     # already in state by the time we get here; this just gives the graph
     # a clean, explicitly named endpoint for the happy path.
@@ -88,6 +98,7 @@ def run(user_message: str, customer_id: str = None, session_id: str = "cli-sessi
         "resolved": False,
         "needs_escalation": False,
         "retry_count": 0,
+        "node_timings_ms": {},
     }
     return app.invoke(initial_state)
 

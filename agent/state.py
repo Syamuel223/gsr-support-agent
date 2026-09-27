@@ -33,6 +33,8 @@ class AgentState(TypedDict, total=False):
     # --- routing ---
     intent: Optional[Intent]
     intent_confidence: Optional[float]
+    intent_source: Optional[str]
+    node_timings_ms: dict
 
     # --- working data gathered by specialist nodes ---
     customer_profile: Optional[dict]

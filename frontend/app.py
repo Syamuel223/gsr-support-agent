@@ -29,6 +29,8 @@ if "customer_id" not in st.session_state:
     st.session_state.customer_id = None
 if "customer_name" not in st.session_state:
     st.session_state.customer_name = None
+if "api_client" not in st.session_state:
+    st.session_state.api_client = requests.Session()
 if "messages" not in st.session_state:
     st.session_state.messages = []  # [{"role": "user"|"assistant", "content": str, ...}]
 
@@ -49,10 +51,9 @@ def _extract_error_detail(resp: requests.Response) -> str:
 
 
 def call_chat_api(message: str) -> dict:
-    resp = requests.post(f"{API_BASE_URL}/chat", json={
+    resp = st.session_state.api_client.post(f"{API_BASE_URL}/chat", json={
         "session_id": st.session_state.session_id,
         "message": message,
-        "customer_id": st.session_state.customer_id,
     }, timeout=60)
     if not resp.ok:
         raise ChatAPIError(_extract_error_detail(resp))
@@ -60,12 +61,9 @@ def call_chat_api(message: str) -> dict:
 
 
 def call_voice_api(audio_bytes: bytes) -> dict:
-    resp = requests.post(
+    resp = st.session_state.api_client.post(
         f"{API_BASE_URL}/chat/voice",
-        params={
-            "session_id": st.session_state.session_id,
-            "customer_id": st.session_state.customer_id,
-        },
+        params={"session_id": st.session_state.session_id},
         files={"audio": ("recording.wav", audio_bytes, "audio/wav")},
         timeout=120,  # local Whisper on CPU can be slow
     )
@@ -80,58 +78,44 @@ def call_voice_api(audio_bytes: bytes) -> dict:
     }
 
 
-# --- sidebar: identify as a customer ---
+# --- sidebar: account authentication ---
 with st.sidebar:
     st.header("GSR Customer")
-
     if st.session_state.customer_id:
-        st.success(f"Signed in as {st.session_state.customer_name or st.session_state.customer_id}")
-        st.caption(f"customer_id: {st.session_state.customer_id}")
+        st.success(f"Signed in as {st.session_state.customer_name or 'GSR customer'}")
         if st.button("Sign out"):
+            st.session_state.api_client.post(f"{API_BASE_URL}/auth/logout", timeout=10)
             st.session_state.customer_id = None
             st.session_state.customer_name = None
+            st.session_state.session_id = str(uuid.uuid4())
             st.rerun()
     else:
-        tab_existing, tab_new = st.tabs(["Existing customer", "New signup"])
-
-        with tab_existing:
-            cid = st.text_input("Customer ID", placeholder="cust_000000")
-            if st.button("Sign in") and cid:
-                st.session_state.customer_id = cid
-                st.rerun()
-
-        with tab_new:
-            st.caption("Proves the real-time requirement: sign up here, then "
-                       "immediately chat as this brand new customer below.")
-            name = st.text_input("Name")
-            email = st.text_input("Email")
-            city = st.text_input("City", value="Bengaluru")
-            state = st.text_input("State", value="KA")
-            if st.button("Sign up"):
-                if not name or not email:
-                    st.warning("Name and email are required.")
+        mode = st.radio("Account", ["Sign in", "Create account"], horizontal=True)
+        name = st.text_input("Name") if mode == "Create account" else None
+        email = st.text_input("Email", key="auth_email")
+        password = st.text_input("Password", type="password", key="auth_password")
+        if st.button(mode):
+            payload = {"email": email, "password": password}
+            endpoint = "login"
+            if mode == "Create account":
+                payload["name"] = name
+                endpoint = "signup"
+            try:
+                resp = st.session_state.api_client.post(f"{API_BASE_URL}/auth/{endpoint}", json=payload, timeout=30)
+                if resp.ok:
+                    account = resp.json()
+                    st.session_state.customer_id = account["customer_id"]
+                    st.session_state.customer_name = account["name"]
+                    st.session_state.session_id = str(uuid.uuid4())
+                    st.rerun()
                 else:
-                    try:
-                        resp = requests.post(f"{API_BASE_URL}/webhook/new-signup", json={
-                            "name": name, "email": email, "city": city, "state": state,
-                        }, timeout=30)
-                    except requests.RequestException as e:
-                        st.error(f"Could not reach the API at {API_BASE_URL} -- "
-                                 f"is `uvicorn api.main:app` still running? ({e})")
-                    else:
-                        if resp.ok:
-                            data = resp.json()
-                            st.session_state.customer_id = data["customer_id"]
-                            st.session_state.customer_name = name
-                            st.toast(f"Signed up as {name} ({data['customer_id']})", icon="✅")
-                            st.rerun()
-                        else:
-                            st.error(f"Signup failed: {_extract_error_detail(resp)}")
+                    st.error(_extract_error_detail(resp))
+            except requests.RequestException as e:
+                st.error(f"Could not reach the API at {API_BASE_URL}: {e}")
 
     st.divider()
     st.caption(f"API: {API_BASE_URL}")
     st.caption(f"session_id: {st.session_state.session_id[:8]}...")
-
 
 # --- main chat area ---
 st.title("🛒 GSR Support")

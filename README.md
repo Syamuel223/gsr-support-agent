@@ -51,7 +51,7 @@ Custom MCP Server: get_order_status | get_customer_profile |
       │
 DuckDB (operational data) + Chroma/pgvector (policy RAG index)
       ▲
-Real-time signup webhook -- new customers are queryable immediately,
+Authenticated signup -- new customers are queryable immediately,
 no batch delay
 ```
 
@@ -103,7 +103,7 @@ Then add to `.env`:
 REDIS_URL=redis://localhost:6379/0
 ```
 
-**Concurrency**: `/chat` and `/webhook/new-signup` are async; the actual
+**Concurrency**: `/chat` and `/auth/signup` are async; the actual
 blocking work (LLM calls, DB queries) runs via `asyncio.to_thread` so one
 slow request doesn't stall the whole server. A semaphore
 (`GSR_MAX_CONCURRENT_AGENT_CALLS`, default 10) caps how many agent
@@ -139,7 +139,7 @@ concurrency reflects the semaphore queuing requests as designed; actual
 
 | Component | Deployed (Docker) | Local only |
 |---|---|---|
-| FastAPI core (`/chat`, `/webhook/new-signup`, `/health`) | ✅ | |
+| FastAPI core (`/chat`, `/auth/*`, `/health`) | ✅ | |
 | RAG (Chroma) + MCP tools (DuckDB) | ✅ | |
 | Redis session store | ✅ | |
 | Streamlit frontend | | ✅ |
@@ -259,7 +259,7 @@ The first run downloads the Whisper model (~150 MB for the default
 
 Once the API is running (see below), test voice over HTTP:
 ```bash
-curl -X POST "http://127.0.0.1:8000/chat/voice?session_id=s1&customer_id=cust_000000" \
+curl -X POST "http://127.0.0.1:8000/chat/voice?session_id=s1" \
   -F "audio=@question.wav" \
   --output response.wav
 ```
@@ -271,35 +271,65 @@ With the API running (see above), in a separate terminal:
 ```bash
 streamlit run frontend/app.py
 ```
-Opens at http://localhost:8501. Use the sidebar to either sign in as an
-existing customer (e.g. `cust_000000`) or sign up as a brand new one --
-signing up there and then immediately chatting proves the same real-time
-requirement as the CLI demo, but interactively. Type a message or use the
+Opens at http://localhost:8501. Use the sidebar to create an account or sign
+in with the email and password used at signup. Type a message or use the
 built-in mic recorder to test voice.
 
-## Running the API + real-time signup demo
+## React storefront + embedded support chat
+
+The responsive React storefront is served at the site root with a Gigi support
+chat launcher in the bottom-right corner. Product cards and imagery are demo
+content; inventory and checkout are not connected. The API also serves the
+storefront in Docker/Render builds.
+
+Clear first-turn order, return, billing, account-security, and policy requests
+use conservative keyword routing to skip the separate intent-classifier model
+call. Follow-up messages still use the LLM classifier so conversation context
+is considered. Each chat response includes node timings and the API logs those
+timings, making the classifier, specialist, semaphore wait, and full agent
+duration visible when diagnosing slow responses.
+
+For local development, start the API, then run Vite in another terminal:
+
 ```bash
 uvicorn api.main:app --reload --port 8000
+cd frontend
+npm install
 ```
-In another terminal:
+
+PowerShell:
+
+```powershell
+$env:VITE_API_BASE_URL="http://localhost:8000"
+npm run dev
+```
+
+Open http://localhost:5173. Create an account using an email address and a
+password of at least 12 characters, or sign in with that email and password.
+The API stores salted PBKDF2 password hashes and uses an HttpOnly, signed,
+12-hour cookie for authentication. `/chat` derives the customer identity from
+that cookie; it rejects caller-supplied customer IDs. Existing synthetic
+customers are not claimable by ID because their generated records have no
+verified credentials. New accounts can use personalized support as real orders
+are associated with them.
+
+Set `GSR_AUTH_SECRET_KEY` to a long random value on Render, alongside
+`GOOGLE_API_KEY`. Generate a key with
+`python -c "import secrets; print(secrets.token_urlsafe(48))"`. Without a
+configured key, local development creates a temporary key, so signed-in users
+will need to sign in again after an API restart.
+
+## Running the authenticated signup and chat demo
+
 ```bash
+uvicorn api.main:app --reload --port 8000
 python scripts/demo_realtime_signup.py
 ```
-This registers a brand new customer via /webhook/new-signup and
-immediately chats as them via /chat -- proving there's no batch/refresh
-delay between signup and being queryable.
 
-You can also call the endpoints directly:
-```bash
-curl -X POST http://127.0.0.1:8000/webhook/new-signup \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Test User", "email": "test@example.com", "city": "Pune", "state": "MH"}'
-
-curl -X POST http://127.0.0.1:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "s1", "customer_id": "cust_000000", "message": "Where is my order ord_000519?"}'
-```
-
+The script creates an account, receives an HttpOnly authentication cookie,
+and immediately sends a chat request as that authenticated customer. For
+manual use, sign up and chat in the React storefront; do not pass a
+`customer_id` in the chat request body.
 ## Repo layout
 ```
 data/             synthetic data generator + DuckDB loader
@@ -308,7 +338,7 @@ rag/              embedding/indexing scripts (added in a later phase)
 mcp_server/       custom MCP server + tools (added in a later phase)
 agent/            LangGraph multi-agent graph + nodes (added in a later phase)
 voice/            STT/TTS layer (added in a later phase)
-api/              FastAPI app + real-time signup webhook (added in a later phase)
+api/              FastAPI app + account authentication (added in a later phase)
 frontend/         chat + voice UI (added in a later phase)
 ```
 

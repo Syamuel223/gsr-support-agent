@@ -2,6 +2,15 @@
 # Voice (Whisper + pyttsx3) is intentionally excluded here -- see
 # requirements-core.txt and README's Deployment section for why.
 
+# Build the React storefront once, then serve its static bundle from FastAPI.
+FROM node:20-alpine AS storefront-build
+WORKDIR /frontend
+COPY frontend/package.json ./package.json
+RUN npm install
+COPY frontend/index.html frontend/vite.config.js ./
+COPY frontend/src ./src
+RUN npm run build
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -17,6 +26,7 @@ RUN pip install --no-cache-dir -r requirements-core.txt
 
 COPY agent/ agent/
 COPY api/ api/
+COPY --from=storefront-build /frontend/dist frontend/dist
 COPY mcp_server/ mcp_server/
 COPY rag/ rag/
 COPY knowledge_base/ knowledge_base/

@@ -6,6 +6,7 @@ classification task, not something requiring deep reasoning.
 """
 
 from pydantic import BaseModel, Field
+import re
 
 from agent.state import AgentState, Intent
 
@@ -36,6 +37,33 @@ class IntentClassification(BaseModel):
     confidence: float = Field(description="Confidence from 0.0 to 1.0", ge=0.0, le=1.0)
 
 
+def _fast_path_intent(message: str) -> str | None:
+    """Skip one model round trip for clear, common requests only."""
+    text = message.lower()
+    if any(term in text for term in (
+        "unauthorized access", "someone accessed", "hacked", "account compromised",
+        "suspicious login", "stolen account", "unrecognized order",
+    )):
+        return "account_issue"
+    if "policy" in text:
+        return "general_policy"
+    if re.search(r"\b(return|refund|exchange|returning)\b", text):
+        return "returns_refunds"
+    if re.search(r"\b(double charge|charged twice|payment|billing|invoice|emi)\b", text):
+        return "billing_payment"
+    if re.search(r"\b(ord[_-][a-z0-9]+)\b", text) or any(term in text for term in (
+        "track my order", "where is my order", "order status", "delivery status",
+        "tracking number", "has my order shipped", "when will my order arrive",
+    )):
+        return "order_status"
+    if any(term in text for term in (
+        "reset my password", "change my password", "forgot my password",
+        "update my account", "change my email", "account locked",
+    )):
+        return "account_issue"
+    return None
+
+
 def classify_intent(state: AgentState) -> dict:
     from langchain_core.prompts import ChatPromptTemplate
 
@@ -47,6 +75,13 @@ def classify_intent(state: AgentState) -> dict:
 
     history_text = format_history(state.get("conversation_history", []))
     message = state["user_message"]
+    fast_intent = _fast_path_intent(message) if not history_text else None
+    if fast_intent:
+        return {
+            "intent": fast_intent,
+            "intent_confidence": 0.95,
+            "intent_source": "fast_path",
+        }
     if history_text:
         message = f"Previous conversation:\n{history_text}\n\nLatest message: {message}"
 
@@ -61,6 +96,7 @@ def classify_intent(state: AgentState) -> dict:
     return {
         "intent": result.intent,
         "intent_confidence": result.confidence,
+        "intent_source": "llm",
     }
 
 
